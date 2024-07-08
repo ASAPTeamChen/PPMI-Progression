@@ -1,0 +1,512 @@
+---
+title: "LRRK2 Overall Analysis"
+author: "Jackson Schumacher"
+date: "`r Sys.Date()`"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup}
+knitr::opts_chunk$set(echo = TRUE)
+
+check_and_load <- function(package, use_source = FALSE) {
+  if (!require(package, character.only = TRUE)) {
+    if (use_source) {
+      install.packages(package, dependencies = TRUE, type = "source")
+    } else {
+      install.packages(package, dependencies = TRUE)
+    }
+    library(package, character.only = TRUE)
+  }
+}
+
+setwd("/Users/jackson/Desktop/LRRK2 MS Materials")
+```
+
+```{r check_and_load}
+check_and_load("dplyr")
+check_and_load("readxl")
+check_and_load("tableone")
+check_and_load("writexl")
+check_and_load("tidyr")
+check_and_load("VennDiagram")
+check_and_load("grid")
+
+check_and_load("lme4")
+check_and_load("lmerTest")
+check_and_load("ggplot2")
+check_and_load("sjPlot")
+check_and_load("broom.mixed")
+check_and_load("patchwork")
+check_and_load("ggpubr")
+check_and_load("RColorBrewer")
+```
+
+# Baseline demographics
+
+## Data read in
+
+```{r}
+file_path <- "/Users/jackson/Desktop/LRRK2 MS Materials/LRRK2 PPMI (2023 V4) Analysis Data (Latest) (LRRK2 combined).xlsx"
+
+data_dem1 <- read_excel(file_path, sheet = "Demographics (Latest)")
+
+# Display structure of the data
+str(data_dem1)
+
+# Check first few rows to understand variable types
+head(data_dem1)
+
+# Show the number of unique values in data_dem$`Subject ID`
+num_unique_subject_id <- data_dem1 %>%
+  summarise(n_unique = n_distinct(`Subject ID`))
+print(num_unique_subject_id)
+
+# Check for missing values in all variables
+na_summary <- data_dem1 %>%
+  summarise_all(~ sum(is.na(.)))%>%
+  pivot_longer(cols = everything(), names_to = "Variable", values_to = "MissingValues")
+print(na_summary)
+```
+
+```{r}
+data_dem1 <- data_dem1  %>%
+  mutate(across(where(is.character) & !all_of("Subject ID"), as.factor))
+
+# Display the levels of all factor variables in data_dem
+sapply(data_dem1, levels)
+```
+
+```{r}
+# Reorder factor levels for the specified variables
+data_dem <- data_dem1 %>%
+  mutate(
+    Cohort = factor(Cohort, levels = c("SPD", "LRRK2 PD", "GBA PD", "LRRK2-GBA PD")),
+    `SAA Result` = factor(`SAA Result`, levels = c("Negative", "Positive", "Inconclusive", "Mixed Results", "Unknown")),
+    Sex = factor(Sex, levels = c("Female", "Male")),
+    Ethnicity = factor(Ethnicity, levels = c("Hispanic or Latino", "Not Hispanic or Latino", "Unknown")),
+    Race = factor(Race, levels = c("White", "Black or African American", "Asian", "Native Hawaiian or Other Pacific Islander", "Other", "Multiracial", "Unknown")),
+    `Years of Education` = factor(`Years of Education`, levels = c("0 years", "Less than 12 years", "12-16 years", "Greater than 16 years")),
+    `Parent with PD` = factor(`Parent with PD`, levels = c("No", "Yes", "Unknown")),
+    `Other Relative with PD` = recode(`Other Relative with PD`, "no" = "No"),
+    `Other Relative with PD` = factor(`Other Relative with PD`, levels = c("No", "Yes", "Unknown"))
+  )
+
+# Display the reordered factor levels
+sapply(data_dem, levels)
+
+# Show the number of unique values in data_dem$`Subject ID`
+num_unique_subject_id <- data_dem %>%
+  summarise(n_unique = n_distinct(`Subject ID`))
+print(num_unique_subject_id)
+
+na_summary <- data_dem %>%
+  summarise_all(~ sum(is.na(.)))%>%
+  pivot_longer(cols = everything(), names_to = "Variable", values_to = "MissingValues")
+print(na_summary)
+```
+
+Use data_dem as the main analysis dataframe for future analysis.
+
+```{r, eval=FALSE}
+save(data_dem, file = "data_dem.RData")
+```
+
+# 1. LRRK2 and UPDRS analysis
+
+## Data read in
+Changes made from the original data received: particpant_id renamed to participant_id
+
+```{r}
+data_updrs1 <- read_excel(file_path, sheet = "UPDRS III")
+
+str(data_updrs1)
+head(data_updrs1)
+
+na_summary <- data_updrs1 %>%
+  summarise_all(~ sum(is.na(.)))%>%
+  pivot_longer(cols = everything(), names_to = "Variable", values_to = "MissingValues")
+print(na_summary)
+
+data_updrs1 <- data_updrs1 %>%
+  mutate(across(where(is.character) & !all_of('participant_id'), as.factor))
+
+sapply(data_updrs1, levels)
+```
+
+```{r}
+data_updrs2 <- data_updrs1 %>%
+  separate_rows(`Group ID`, sep = " \\| ") %>%
+  mutate(
+    `Group ID` = factor(`Group ID`, levels = c("SPD", "LRRK2 PD", "GBA PD", "LRRK2-GBA PD")),
+    upd23a_medication_for_pd = factor(upd23a_medication_for_pd, levels = c("No", "Yes", "Unknown")),
+    upd23b_clinical_state_on_medication = if_else(is.na(upd23b_clinical_state_on_medication), "Unknown", upd23b_clinical_state_on_medication),
+    upd23b_clinical_state_on_medication = factor(upd23b_clinical_state_on_medication)
+    )
+
+sapply(data_updrs2, levels)
+```
+
+```{r}
+# Select the columns to merge from data_dem
+data_dem_selected <- data_dem %>%
+  select(`Subject ID`, `Age at baseline`, Sex, Race, Ethnicity, `Years of Education`) %>%
+  mutate(
+    Race = factor(if_else(Race == "White", "White", "Other"), levels = c("White", "Other")),
+    Ethnicity = factor(if_else(Ethnicity == "Hispanic or Latino", "Hispanic or Latino", "Other"), levels = c("Hispanic or Latino", "Other")),
+    `Years of Education` = factor(if_else(`Years of Education` == "0 years", "Less than 12 years", `Years of Education`), levels = c("Less than 12 years", "12-16 years", "Greater than 16 years"))
+  ) %>%
+  group_by(`Subject ID`) %>%
+  summarise(across(everything(), first))  # Take the first occurrence for each `Subject ID`
+
+sapply(data_dem_selected, levels)
+
+# Merge the selected columns into data_updrs
+data_updrs3 <- data_updrs2 %>%
+  left_join(data_dem_selected, by = c("participant_id" = "Subject ID"))
+
+# Display the merged data
+str(data_updrs3)
+```
+
+```{r}
+# Ensure unique baseline measures for each participant
+baseline_measures <- data_updrs3 %>%
+  arrange(participant_id, visit_year) %>%
+  group_by(participant_id) %>%
+  slice(1) %>%
+  ungroup() %>%
+  select(participant_id, baseline_score = mds_updrs_part_iii_summary_score)
+
+# Merge the baseline measure into the main data frame
+data_updrs <- data_updrs3 %>%
+  left_join(baseline_measures, by = "participant_id")
+
+# Check for missing values in all variables
+na_summary <- data_updrs %>%
+  summarise_all(~ sum(is.na(.)))%>%
+  pivot_longer(cols = everything(), names_to = "Variable", values_to = "MissingValues")
+print(na_summary)
+```
+
+```{r}
+# Count the number of records for each participant_id
+participant_counts <- data_updrs %>%
+  count(participant_id) %>%
+  rename(number_of_records = n)
+
+# Display the first few rows of the counts
+head(participant_counts)
+
+# Plot the distribution of the number of repeat measures
+ggplot(participant_counts, aes(x = number_of_records)) +
+  geom_histogram(binwidth = 1, fill = "blue", color = "black") +
+  labs(title = "Distribution of Number of Repeat Measures per Participant",
+       x = "Number of Repeat Measures",
+       y = "Count of Participants") +
+  theme_classic()
+
+# Count the number of participants with exactly one record
+n_single_record <- participant_counts %>%
+  filter(number_of_records == 1) %>%
+  summarise(N = n())
+
+print(n_single_record)
+```
+
+```{r}
+# Calculate summary statistics
+summary_stats <- data_updrs %>%
+  summarise(
+    mean = mean(visit_year, na.rm = TRUE),
+    sd = sd(visit_year, na.rm = TRUE),
+    median = median(visit_year, na.rm = TRUE),
+    min = min(visit_year, na.rm = TRUE),
+    max = max(visit_year, na.rm = TRUE)
+  )
+
+# Print summary statistics
+print(summary_stats)
+
+# Create a histogram to show the distribution of visit_year
+histogram_visit_year <- ggplot(data_updrs, aes(x = visit_year)) +
+  geom_histogram(binwidth = 5, fill = "blue", color = "black", alpha = 0.7) +
+  theme_classic() +
+  labs(
+    title = "Distribution of Visit Year",
+    x = "Visit Year",
+    y = "Count"
+  )
+
+# Display the histogram
+histogram_visit_year
+```
+
+Use data_updrs as the main analysis dataframe for future analysis.
+
+```{r, eval=FALSE}
+save(data_updrs, file = "data_updrs.RData")
+```
+
+## Model 1: Unadjusted
+
+```{r}
+# Fit a linear mixed-effects model
+updrs_model1 <- lmer(
+  mds_updrs_part_iii_summary_score ~ visit_year * `Group ID` + baseline_score + (1 | participant_id),
+  data = data_updrs
+)
+
+# Summary of the model
+summary(updrs_model1)
+
+# Create a publishable table using sjPlot
+tab_model(updrs_model1, show.re.var = FALSE, show.icc = FALSE, show.r2 = FALSE, 
+          title = "Model Coefficients and Slopes for Time Effect by Groups")
+```
+
+```{r}
+# Filter out participants with only one measurement
+filtered_data <- data_updrs %>%
+  group_by(participant_id) %>%
+  filter(n() > 1) %>%
+  ungroup()
+
+# Fit the linear mixed-effects model on filtered data
+updrs_model_filtered <- lmer(
+  mds_updrs_part_iii_summary_score ~ visit_year * `Group ID` + baseline_score + (1 | participant_id),
+  data = filtered_data
+)
+
+tab_model(updrs_model_filtered, show.re.var = FALSE, show.icc = FALSE, show.r2 = FALSE, 
+          title = "Model Coefficients and Slopes for Time Effect by Groups")
+```
+
+```{r}
+# Categorize visit_year into bins of every 12 months
+data_updrs <- data_updrs %>%
+  mutate(visit_bin = cut(visit_year, breaks = seq(0, max(visit_year, na.rm = TRUE), by = 1), include.lowest = TRUE, right = FALSE))
+
+# Aggregate the data by visit_bin and Group ID
+data_updrs_summary <- data_updrs %>%
+  group_by(visit_bin, `Group ID`) %>%
+  summarise(
+    mean_score = mean(mds_updrs_part_iii_summary_score, na.rm = TRUE),
+    sd_score = sd(mds_updrs_part_iii_summary_score, na.rm = TRUE),
+    n = n(),
+    visit_year_median = median(visit_year, na.rm = TRUE)
+  ) %>%
+  mutate(se_score = sd_score / sqrt(n))  # Calculate standard error
+
+# Display the summary data
+head(data_updrs_summary)
+
+# Create the plot
+plot_updrs_model1 <- ggplot(data_updrs_summary, aes(x = visit_year_median, y = mean_score, color = `Group ID`, group = `Group ID`)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2) +
+  geom_errorbar(aes(ymin = mean_score - se_score, ymax = mean_score + se_score), width = 0.5) +
+  theme_classic() + 
+  labs(
+    x = "Visit year",
+    y = "MDS-UPDRS Part III score",
+    color = "LRRK2 SNP"
+  ) + 
+  theme(
+    legend.position = "bottom",
+    plot.title = element_blank()
+  ) + 
+  scale_color_brewer(palette = "Set1") +
+  scale_y_continuous(limits = c(9, 54)) +  # Set y-axis range
+  scale_x_continuous(limits = c(0, 14))  # Set x-axis range
+
+plot_updrs_model1
+
+# Extract the legend
+legend <- ggpubr::get_legend(plot_updrs_model1)
+
+# Display the legend
+ggpubr::as_ggplot(legend)
+```
+
+## Model 2: Adjusted for "Age at baseline", "Sex", "Race", "Ethnicity", "Years of Education", "upd23a_medication_for_pd"
+
+Multivariable adjusted progression of MDS-UPDRS Part III score in Parkinson’s Disease patients carrying different LRRK2 mutations.
+
+```{r}
+# Fit a linear mixed-effects model
+updrs_model2 <- lmer(
+  mds_updrs_part_iii_summary_score ~ visit_year * `Group ID` + baseline_score + `Age at baseline` + Sex + Race + Ethnicity + `Years of Education` + upd23a_medication_for_pd + (1 | participant_id),
+  data = data_updrs
+)
+
+# Create a publishable table using sjPlot
+tab_model(updrs_model2, show.re.var = FALSE, show.icc = FALSE, show.r2 = FALSE, 
+          title = "Model Coefficients and Slopes for Time Effect by Groups")
+```
+
+
+```{r}
+# Visualize the fixed effects of the model
+plot_updrs_model2 <- sjPlot::plot_model(updrs_model2, type = "pred", ci.lvl = NA, terms = c("visit_year", "Group ID"), colors = "Set1") +
+  geom_line(linewidth = 0.25) +
+  theme_classic() +
+  labs(
+    x = "Years since baseline visit",
+    y = "Mean UPDRS III score",
+    color = "Group",
+  ) + 
+  theme(
+    legend.position = "bottom",
+    plot.title = element_blank(),
+  ) +
+  scale_y_continuous(limits = c(20, 50)) + # Set y-axis range 
+  scale_x_continuous(limits = c(0, 15))  # Set x-axis range
+
+plot_updrs_model2
+```
+## Model 1: Unadjusted
+
+```{r}
+data_updrs_saa <- data_updrs %>%
+  filter(`SAA Result` %in% c("Negative", "Positive"))
+
+updrs_saa1 <- lmer(
+  mds_updrs_part_iii_summary_score ~ visit_year * `SAA Result` + baseline_score + (1 | participant_id),
+  data = data_updrs_saa
+)
+
+tab_model(updrs_saa1, show.re.var = FALSE, show.icc = FALSE, show.r2 = FALSE, 
+          title = "Model Coefficients and Slopes for Time Effect by Groups")
+```
+
+```{r}
+# Categorize visit_year into bins of every 12 months
+data_updrs_saa <- data_updrs_saa %>%
+  mutate(visit_bin = cut(visit_year, breaks = seq(0, max(visit_year, na.rm = TRUE), by = 1), include.lowest = TRUE, right = FALSE))
+
+# Aggregate the data by visit_bin and Group ID
+data_updrs_saa_summary <- data_updrs_saa %>%
+  group_by(visit_bin, `SAA Result`) %>%
+  summarise(
+    mean_score = mean(mds_updrs_part_iii_summary_score, na.rm = TRUE),
+    sd_score = sd(mds_updrs_part_iii_summary_score, na.rm = TRUE),
+    n = n(),
+    visit_year_median = median(visit_year, na.rm = TRUE)
+  ) %>%
+  mutate(se_score = sd_score / sqrt(n))  # Calculate standard error
+
+# Display the summary data
+head(data_updrs_saa_summary)
+
+# Create the plot
+plot_updrs_saa1 <- ggplot(data_updrs_saa_summary, aes(x = visit_year_median, y = mean_score, color = `SAA Result`, group = `SAA Result`)) +
+  geom_line(linewidth = 0.25) +
+  geom_point(size = 2) +
+  geom_errorbar(aes(ymin = mean_score - se_score, ymax = mean_score + se_score), width = 0.5) +
+  theme_classic() + 
+  labs(
+    x = "Visit month",
+    y = "MDS-UPDRS Part III score",
+    color = "α-synuclein Seed Amplification Assay"
+  ) + 
+  theme(
+    legend.position = "bottom",
+    plot.title = element_blank()
+  ) + 
+  scale_color_brewer(palette = "Set2") +
+  scale_y_continuous(limits = c(9, 54)) +  # Set y-axis range
+  scale_x_continuous(limits = c(0, 15))  # Set x-axis range
+
+plot_updrs_saa1
+
+# Extract the legend
+legend_saa <- ggpubr::get_legend(plot_updrs_saa1)
+```
+
+## Model 2: Adjusted for "Age at baseline", "Sex", "Race", "Ethnicity", "Years of Education", "upd23a_medication_for_pd"
+
+```{r}
+updrs_saa2 <- lmer(
+  mds_updrs_part_iii_summary_score ~ visit_year * `SAA Result` + baseline_score + `Age at baseline` + Sex + Race + Ethnicity + `Years of Education` + upd23a_medication_for_pd + (1 | participant_id),
+  data = data_updrs_saa
+)
+
+tab_model(updrs_saa2, show.re.var = FALSE, show.icc = FALSE, show.r2 = FALSE, 
+          title = "Model Coefficients and Slopes for Time Effect by Groups")
+```
+## Model 3: Additionally adjusted for LRRK2 and GBA Mutation
+
+```{r}
+# Fit a linear mixed-effects model
+updrs_saa3 <- lmer(
+  mds_updrs_part_iii_summary_score ~ visit_year * `SAA Result` + baseline_score + `Age at baseline` + Sex + Race + Ethnicity + `Years of Education` + upd23a_medication_for_pd + `Group ID` + (1 | participant_id),
+  data = data_updrs_saa
+)
+
+tab_model(updrs_saa3, show.re.var = FALSE, show.icc = FALSE, show.r2 = FALSE, 
+          title = "Model Coefficients and Slopes for Time Effect by Groups")
+```
+
+```{r}
+# Visualize the fixed effects of the model
+plot_updrs_saa3 <- sjPlot::plot_model(updrs_saa3, ci.lvl = NA, type = "pred", terms = c("visit_year", "SAA Result")) + 
+  geom_line(linewidth = 0.25) +
+  theme_classic() + 
+  labs(
+    x = "Visit month",
+    y = "MDS-UPDRS Part III score",
+    color = "α-synuclein Seed Amplification Assay"
+  ) + 
+  theme(
+    legend.position = "bottom",
+    plot.title = element_blank()
+  ) + 
+  scale_color_brewer(palette = "Set1") +
+  scale_y_continuous(limits = c(20, 50)) +  # Set y-axis range
+  scale_x_continuous(limits = c(0, 15))  # Set x-axis range
+
+plot_updrs_saa3
+```
+
+## SAA * LRRK2 interaction
+
+Significant
+
+```{r}
+updrs_saa4 <- lmer(
+  mds_updrs_part_iii_summary_score ~ visit_year * `SAA Result` * `Group ID` + baseline_score + `Age at baseline` + Sex + Race + Ethnicity + `Years of Education` + upd23a_medication_for_pd + (1 | participant_id),
+  data = data_updrs_saa
+)
+
+tab_model(updrs_saa4, show.re.var = FALSE, show.icc = FALSE, show.r2 = FALSE, 
+          title = "Model Coefficients and Slopes for Time Effect by Groups")
+
+# Perform an ANOVA to compare the models
+anova(updrs_saa3, updrs_saa4)
+```
+
+### Figure 2
+
+```{r}
+# Visualize the fixed effects of the model for the interaction terms
+plot_updrs_saa4 <- sjPlot::plot_model(updrs_saa4, type = "pred", ci.lvl = NA, terms = c("visit_year", "SAA Result", "Group ID"), colors = "Set1") + 
+  geom_line(linewidth = 0.25) +
+  theme_classic() + 
+  labs(
+    x = "Visit month",
+    y = "MDS-UPDRS Part III score",
+    color = "Interaction: α-synuclein SAA * LRRK2 mutation"
+  ) + 
+  theme(
+    legend.position = "bottom",
+    plot.title = element_blank()
+  ) + 
+  scale_y_continuous(limits = c(10, 50)) +  # Set y-axis range
+  scale_x_continuous(limits = c(0, 15))  # Set x-axis range
+
+# Display the plot
+print(plot_updrs_saa4)
+
+```
