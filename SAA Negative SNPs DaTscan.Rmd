@@ -1,0 +1,414 @@
+---
+title: "LRRK2 DaTscan Analysis"
+author: "Jackson Schumacher"
+date: "`r Sys.Date()`"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup}
+knitr::opts_chunk$set(echo = TRUE)
+
+check_and_load <- function(package, use_source = FALSE) {
+  if (!require(package, character.only = TRUE)) {
+    if (use_source) {
+      install.packages(package, dependencies = TRUE, type = "source")
+    } else {
+      install.packages(package, dependencies = TRUE)
+    }
+    library(package, character.only = TRUE)
+  }
+}
+
+setwd("/Users/jackson/Desktop/LRRK2 MS Materials")
+```
+
+```{r cars}
+check_and_load("dplyr")
+check_and_load("readxl")
+check_and_load("tableone")
+check_and_load("writexl")
+check_and_load("tidyr")
+check_and_load("VennDiagram")
+check_and_load("grid")
+
+check_and_load("lme4")
+check_and_load("lmerTest")
+check_and_load("ggplot2")
+check_and_load("sjPlot")
+check_and_load("broom.mixed")
+check_and_load("patchwork")
+check_and_load("ggpubr")
+check_and_load("RColorBrewer")
+```
+
+# Baselinedemographics
+
+## Data read in
+
+
+```{r}
+file_path <- "/Users/jackson/Desktop/LRRK2 MS Materials/LRRK2 PPMI (2023 V4) Analysis Data (Latest) (SAA Negative SNPs).xlsx"
+
+data_dem1 <- read_excel(file_path, sheet = "Demographics (Latest)")
+
+# Display structure of the data
+str(data_dem1)
+
+# Check first few rows to understand variable types
+head(data_dem1)
+
+# Show the number of unique values in data_dem$`Subject ID`
+num_unique_subject_id <- data_dem1 %>%
+  summarise(n_unique = n_distinct(`Subject ID`))
+print(num_unique_subject_id)
+
+# Check for missing values in all variables
+na_summary <- data_dem1 %>%
+  summarise_all(~ sum(is.na(.)))%>%
+  pivot_longer(cols = everything(), names_to = "Variable", values_to = "MissingValues")
+print(na_summary)
+```
+
+```{r}
+data_dem1 <- data_dem1  %>%
+  mutate(across(where(is.character) & !all_of("Subject ID"), as.factor))
+
+# Display the levels of all factor variables in data_dem
+sapply(data_dem1, levels)
+```
+
+```{r}
+# Reorder factor levels for the specified variables
+data_dem <- data_dem1 %>%
+  mutate(
+    Cohort = factor(Cohort, levels = c("SPD", "G2019S PD", "M1646T R1441C/G PD", "N2081D/N14D PD")),
+    `SAA Result` = factor(`SAA Result`, levels = c("Negative", "Positive", "Inconclusive", "Mixed Results", "Unknown")),
+    Sex = factor(Sex, levels = c("Female", "Male")),
+    Ethnicity = factor(Ethnicity, levels = c("Hispanic or Latino", "Not Hispanic or Latino", "Unknown")),
+    Race = factor(Race, levels = c("White", "Black or African American", "Asian", "Native Hawaiian or Other Pacific Islander", "Other", "Multiracial", "Unknown")),
+    `Years of Education` = factor(`Years of Education`, levels = c("0 years", "Less than 12 years", "12-16 years", "Greater than 16 years")),
+    `Parent with PD` = factor(`Parent with PD`, levels = c("No", "Yes", "Unknown")),
+    `Other Relative with PD` = recode(`Other Relative with PD`, "no" = "No"),
+    `Other Relative with PD` = factor(`Other Relative with PD`, levels = c("No", "Yes", "Unknown"))
+  )
+
+# Display the reordered factor levels
+sapply(data_dem, levels)
+
+# Show the number of unique values in data_dem$`Subject ID`
+num_unique_subject_id <- data_dem %>%
+  summarise(n_unique = n_distinct(`Subject ID`))
+print(num_unique_subject_id)
+
+na_summary <- data_dem %>%
+  summarise_all(~ sum(is.na(.)))%>%
+  pivot_longer(cols = everything(), names_to = "Variable", values_to = "MissingValues")
+print(na_summary)
+```
+
+Use data_dem as the main analysis dataframe for future analysis.
+
+```{r, eval=FALSE}
+save(data_dem, file = "data_dem.RData")
+```
+```{r}
+file_path <- "/Users/jackson/Desktop/LRRK2 MS Materials/LRRK2 PPMI (2023 V4) Analysis Data (Latest) (SAA Negative SNPs).xlsx"
+
+data_datscan1 <- read_excel(file_path, sheet = "DaTscan")
+
+# Display structure of the data
+str(data_datscan1)
+
+# Check first few rows to understand variable types
+head(data_datscan1)
+
+# Check for missing values in all variables
+na_summary <- data_datscan1 %>%
+  summarise_all(~ sum(is.na(.)))%>%
+  pivot_longer(cols = everything(), names_to = "Variable", values_to = "MissingValues")
+print(na_summary)
+
+# Remove observations with NA
+data_datscan2 <- data_datscan1 %>%
+  filter(!is.na(visit_year)) 
+```
+
+```{r}
+data_datscan2 <- data_datscan2 %>%
+  mutate(across(where(is.character) & !all_of('participant_id'), as.factor))
+
+sapply(data_updrs2, levels)
+```
+
+```{r}
+data_datscan3 <- data_datscan2 %>%
+  separate_rows(`Group ID`, sep = " \\| ") %>%
+  mutate(
+    `Group ID` = factor(`Group ID`, levels = c("SPD", "G2019S PD", "M1646T R1441C/G PD", "N2081D/N14D PD")),
+    sbr_caudate = (sbr_caudate_r + sbr_caudate_l) / 2,
+    sbr_putamen = (sbr_putamen_r + sbr_putamen_l) / 2
+  )
+
+sapply(data_datscan3, levels)
+```
+
+```{r}
+# Select the columns to merge from data_dem
+data_dem_selected <- data_dem %>%
+  select(`Subject ID`, `Age at baseline`, Sex, Race, Ethnicity, `Years of Education`, `Parent with PD`, `Other Relative with PD`) %>%
+  mutate(
+    Race = factor(if_else(Race == "White", "White", "Other"), levels = c("White", "Other")),
+    Ethnicity = factor(if_else(Ethnicity == "Hispanic or Latino", "Hispanic or Latino", "Other"), levels = c("Hispanic or Latino", "Other")),
+    `Years of Education` = factor(if_else(`Years of Education` == "0 years", "Less than 12 years", `Years of Education`), levels = c("Less than 12 years", "12-16 years", "Greater than 16 years"))
+  ) %>%
+  group_by(`Subject ID`) %>%
+  summarise(across(everything(), first))  # Take the first occurrence for each `Subject ID`
+
+# Merge the selected columns into data_datscan
+data_datscan3 <- data_datscan3 %>%
+  left_join(data_dem_selected, by = c("participant_id" = "Subject ID"))
+
+data_updrs_selected <- data_updrs %>%
+  select(participant_id, upd23a_medication_for_pd) %>%
+  group_by(participant_id) %>%
+  slice(1) %>%
+  ungroup()
+
+data_datscan3 <- data_datscan3 %>%
+  left_join(data_updrs_selected, by = "participant_id")
+
+# Extract baseline values for each outcome score
+baseline_values <- data_datscan3 %>%
+  group_by(participant_id) %>%
+  filter(visit_year == min(visit_year)) %>%
+  slice(1) %>%
+  select(participant_id, 
+         baseline_sbr_caudate_r = sbr_caudate_r, 
+         baseline_sbr_caudate_l = sbr_caudate_l, 
+         baseline_sbr_caudate = sbr_caudate, 
+         baseline_sbr_putamen_r = sbr_putamen_r, 
+         baseline_sbr_putamen_l = sbr_putamen_l, 
+         baseline_sbr_putamen = sbr_putamen)%>%
+  ungroup()
+
+# Merge the baseline values into the main data frame
+data_datscan <- data_datscan3 %>%
+  left_join(baseline_values, by = "participant_id")
+
+# Display the first few rows to verify the changes
+str(data_datscan)
+```
+
+```{r}
+# Check for missing values in all variables
+na_summary <- data_datscan %>%
+  summarise_all(~ sum(is.na(.)))%>%
+  pivot_longer(cols = everything(), names_to = "Variable", values_to = "MissingValues")
+print(na_summary)
+```
+
+Show the number of unique Subject ID
+
+```{r}
+num_unique_subject_id <- data_datscan %>%
+  summarise(n_unique = n_distinct(participant_id))
+print(num_unique_subject_id)
+```
+
+Count the number of records for each participant_id
+
+```{r}
+participant_counts <- data_datscan %>%
+  count(participant_id) %>%
+  rename(number_of_records = n)
+
+# Display the first few rows of the counts
+head(participant_counts)
+
+# Plot the distribution of the number of repeat measures
+ggplot(participant_counts, aes(x = number_of_records)) +
+  geom_histogram(binwidth = 1, fill = "blue", color = "black") +
+  labs(title = "Distribution of Number of Repeat Measures per Participant",
+       x = "Number of Repeat Measures",
+       y = "Count of Participants") +
+  theme_classic()
+```
+
+Create a histogram to show the distribution of visit_year
+
+```{r}
+histogram_visit_year <- ggplot(data_datscan, aes(x = visit_year)) +
+  geom_histogram(binwidth = 1, fill = "darkgreen", color = "black", alpha = 0.7) +
+  theme_classic() +
+  labs(
+    title = "Distribution of Visit Month",
+    x = "Visit Month",
+    y = "Count"
+  )+
+  scale_y_continuous(limits = c(0, 1000)) +  # Set y-axis range
+  scale_x_continuous(limits = c(-1, 6))  # Set x-axis range
+
+
+# Display the histogram
+histogram_visit_year
+```
+
+## Table S4: Table 1 for DaTscan
+
+```{r}
+data_datscan_dem <- data_datscan %>% 
+  group_by(participant_id, `Group ID`) %>%
+  filter(visit_year == min(visit_year)) %>%
+  slice(1) %>%
+  ungroup()
+
+# Define variables and categorical variables
+vars <- c("Age at baseline", "Sex", "Race", "Ethnicity", "Years of Education", "Parent with PD", "Other Relative with PD", "GBA Mutation", "SAA Result")
+catVars <- c("Sex", "Race", "Ethnicity", "Years of Education", "Parent with PD", "Other Relative with PD", "GBA Mutation", "SAA Result")
+
+# Generate Table 1
+table1 <- CreateTableOne(vars = vars, strata = "Group ID", data = data_datscan_dem, factorVars = catVars)
+
+```
+
+# 1. LRRK2 and DaTscan 
+
+## Model 1 Caudate: Unadjusted
+
+```{r}
+# Aggregate the data by visit_name and Group ID
+data_datscan_summary <- data_datscan %>%
+  group_by(visit_year, `Group ID`) %>%
+  summarise(
+    caudate_mean_score = mean(sbr_caudate, na.rm = TRUE),
+    caudate_sd_score = sd(sbr_caudate, na.rm = TRUE),
+    putamen_mean_score = mean(sbr_putamen, na.rm = TRUE),
+    putamen_sd_score = sd(sbr_putamen, na.rm = TRUE),
+    n = n()
+  ) %>%
+  mutate(caudate_se_score = caudate_sd_score / sqrt(n),
+         putamen_se_score = putamen_sd_score / sqrt(n))  # Calculate standard error
+```
+
+```{r}
+caudate_model1 <- lmer(
+  sbr_caudate ~ visit_year * `Group ID` + baseline_sbr_caudate + (1 | participant_id),
+  data = data_datscan
+)
+
+tab_model(caudate_model1, show.re.var = FALSE, show.icc = FALSE, show.r2 = FALSE, title = "Caudate")
+
+plot_caudate_model1 <- ggplot(data_datscan_summary, aes(x = visit_year, y = caudate_mean_score, color = `Group ID`, group = `Group ID`)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2) +
+  geom_errorbar(aes(ymin = caudate_mean_score - caudate_se_score, ymax = caudate_mean_score + caudate_se_score), width = 0.5) +
+  theme_classic() + 
+  labs(
+    x = "Visit month",
+    y = "Caudate",
+    color = "LRRK2 SNP"
+  ) + 
+  theme(
+    legend.position = "bottom",
+    plot.title = element_blank()
+  ) + 
+  scale_color_brewer(palette = "Set1") +
+  scale_y_continuous(limits = c(1, 2.5)) +  # Set y-axis range
+  scale_x_continuous(limits = c(0, 5))  # Set x-axis range
+
+plot_caudate_model1
+
+legend <- ggpubr::get_legend(plot_caudate_model1)
+```
+
+## Model 1 Putamen 
+
+```{r}
+putamen_model1 <- lmer(
+  sbr_putamen ~ visit_year * `Group ID` + baseline_sbr_putamen + (1 | participant_id),
+  data = data_datscan
+)
+
+tab_model(putamen_model1, show.re.var = FALSE, show.icc = FALSE, show.r2 = FALSE, title = "Putamen")
+
+plot_putamen_model1 <- ggplot(data_datscan_summary, aes(x = visit_year, y = putamen_mean_score, color = `Group ID`, group = `Group ID`)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2) +
+  geom_errorbar(aes(ymin = putamen_mean_score - putamen_se_score, ymax = putamen_mean_score + putamen_se_score), width = 0.5) +
+  theme_classic() + 
+  labs(
+    x = "Visit month",
+    y = "Putamen",
+    color = "LRRK2 SNP"
+  ) + 
+  theme(
+    legend.position = "bottom",
+    plot.title = element_blank()
+  ) +
+  scale_y_continuous(limits = c(0, 1.2)) +  # Set y-axis range
+  scale_x_continuous(limits = c(0, 5))  # Set x-axis range
+
+plot_putamen_model1
+```
+
+## Model 2 Caudate: Adjusted for "Age at baseline", "Sex", "Race", "Ethnicity", "Years of Education", "upd23a_medication_for_pd"
+
+```{r}
+# Fit a linear mixed-effects model
+caudate_model2 <- lmer(
+  sbr_caudate ~ visit_year * `Group ID` + baseline_sbr_caudate + `Age at baseline` + Sex + Race + Ethnicity + `Years of Education` + upd23a_medication_for_pd + (1 | participant_id),
+  data = data_datscan
+)
+
+tab_model(caudate_model2, show.re.var = FALSE, show.icc = FALSE, show.r2 = FALSE, title = "Caudate")
+
+# Visualize the fixed effects of the model
+plot_caudate_model2 <- sjPlot::plot_model(caudate_model2, type = "pred", ci.lvl = NA, terms = c("visit_year", "Group ID"), color = "breakfast club") + 
+  geom_line(linewidth = 0.25) + 
+  theme_classic() + 
+  labs(
+    x = "Visit year",
+    y = "Caudate",
+    color = "LRRK2 SNP"
+  ) + 
+  theme(
+    legend.position = "bottom",
+    plot.title = element_blank()
+  ) +
+  scale_y_continuous(limits = c(1.25, 2)) +  # Set y-axis range
+  scale_x_continuous(limits = c(0, 4))  # Set x-axis range
+
+plot_caudate_model2
+```
+
+## Model 2 Putamen
+
+```{r}
+# Fit a linear mixed-effects model
+putamen_model2 <- lmer(
+  sbr_putamen ~ visit_year * `Group ID` + baseline_sbr_putamen + `Age at baseline` + Sex + Race + Ethnicity + `Years of Education` + upd23a_medication_for_pd + (1 | participant_id),
+  data = data_datscan
+)
+
+tab_model(putamen_model2, show.re.var = FALSE, show.icc = FALSE, show.r2 = FALSE, title = "Putamen")
+
+# Visualize the fixed effects of the model
+plot_putamen_model2 <- sjPlot::plot_model(putamen_model2, type = "pred", ci.lvl = NA, terms = c("visit_year", "Group ID"), color = "breakfast club") + 
+  geom_line(linewidth = 0.25) +
+  theme_classic() + 
+  labs(
+    x = "Visit month",
+    y = "Putamen",
+    color = "LRRK2 SNP"
+  ) + 
+  theme(
+    legend.position = "bottom",
+    plot.title = element_blank()
+  ) +
+  scale_y_continuous(limits = c(0.5, 0.9)) +  # Set y-axis range
+  scale_x_continuous(limits = c(0, 4))  # Set x-axis range
+
+plot_putamen_model2
+```
